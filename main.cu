@@ -452,9 +452,9 @@ namespace
 } // namespace
 
 int main(){
-    const auto programStartTime = std::chrono::system_clock::now();
+    const auto programStartTime = std::chrono::steady_clock::now();
     cudaFree(nullptr); // Initializes CUDA runtime.
-    const auto processingStartTime = std::chrono::system_clock::now();
+    const auto processingStartTime = std::chrono::steady_clock::now();
 
     cudaEvent_t gpuStartEvent;
     cudaEventCreate(&gpuStartEvent);
@@ -546,10 +546,10 @@ int main(){
     cudaEventRecord(gpuFinishEvent, streams[0]);
     cudaEventSynchronize(gpuFinishEvent);
 
-    const auto programTotalTime = std::chrono::system_clock::now() - programStartTime;
+    const auto programTotalTime = std::chrono::steady_clock::now() - programStartTime;
     std::cout << "Total time: " << std::chrono::duration_cast<std::chrono::milliseconds>(programTotalTime).count()
             << " ms\n";
-    const auto processingTime = std::chrono::system_clock::now() - processingStartTime;
+    const auto processingTime = std::chrono::steady_clock::now() - processingStartTime;
     std::cout << "Total time (without CUDA initialization): "
             << std::chrono::duration_cast<std::chrono::milliseconds>(processingTime).count() << " ms\n";
 
