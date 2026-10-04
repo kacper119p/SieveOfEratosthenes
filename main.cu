@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <iostream>
 #include <limits>
+#include <new>
 
 #ifdef NDEBUG
 #define CUDA_CHECK(call) call
@@ -33,9 +34,12 @@ namespace
     constexpr uint32_t BaseThreads = 1024u;
     constexpr uint32_t BaseSieveWords = 1024u;
     constexpr uint32_t MaxBaseValue = 2u * BaseSieveWords * BitsPerWord + 1u;
-    constexpr uint32_t NumBatches = 8u; // compute / D2H copy pipelining
 
-    constexpr uint32_t NumMaskGroups = 4u;
+    constexpr uint32_t NumBatches = 8u;
+    constexpr uint32_t PinPiecesPerBatch = 4u;
+    constexpr size_t PageBytes = 4096u;
+
+    constexpr uint32_t MaskGroupsCount = 4u;
     constexpr uint32_t MaskPeriod0 = 7u * 11u * 13u * 17u;
     constexpr uint32_t MaskPeriod1 = 19u * 23u * 29u;
     constexpr uint32_t MaskPeriod2 = 31u * 37u * 41u;
@@ -115,7 +119,7 @@ namespace
 
     struct MaskGroupTable
     {
-        MaskGroup Groups[NumMaskGroups];
+        MaskGroup Groups[MaskGroupsCount];
     };
 
     constexpr MaskGroupTable MaskGroups = {
@@ -138,20 +142,36 @@ namespace
 
     __global__ void __launch_bounds__(256)
     InitMasksKernel(const MaskGroupTable Table){
+        constexpr uint32_t maxGroupPrimes = 4u;
+        // Multiples of p (coprime to 30) occupy bits l with l mod 8p in {ValueToBit(p * WheelResidue(j))}, j < 8.
+        __shared__ uint32_t residues[maxGroupPrimes][WheelBits];
+
         const MaskGroup& g = Table.Groups[blockIdx.y];
+        if (threadIdx.x < maxGroupPrimes * WheelBits)
+        {
+            const uint32_t k = threadIdx.x / WheelBits;
+            const uint32_t j = threadIdx.x % WheelBits;
+            residues[k][j] = k < g.Count ? ValueToBit(g.Primes[k] * WheelResidue(j)) : 0u;
+        }
+        __syncthreads();
+
         for (uint32_t w = blockIdx.x * blockDim.x + threadIdx.x; w < g.Period; w += gridDim.x * blockDim.x)
         {
+            const uint32_t firstBit = w * BitsPerWord;
             uint32_t word = 0;
-            for (uint32_t b = 0; b < BitsPerWord; ++b)
+#pragma unroll
+            for (uint32_t k = 0; k < maxGroupPrimes; ++k)
             {
-                const uint32_t i = w * BitsPerWord + b;
-                const uint32_t v = WheelSpan * (i / WheelBits) + WheelResidue(i % WheelBits);
-                for (uint32_t k = 0; k < g.Count; ++k)
+                if (k < g.Count)
                 {
-                    if (v % g.Primes[k] == 0)
+                    const uint32_t step = WheelBits * g.Primes[k];
+                    const uint32_t base = firstBit % step;
+#pragma unroll
+                    for (uint32_t j = 0; j < WheelBits; ++j)
                     {
-                        word |= 1u << b;
-                        break;
+                        const uint32_t r = residues[k][j];
+                        const uint32_t off = r >= base ? r - base : r + step - base;
+                        word |= off < BitsPerWord ? 1u << off : 0u;
                     }
                 }
             }
@@ -476,7 +496,7 @@ int main(){
 
     cudaEventRecord(gpuStartEvent, streams[0]);
 
-    constexpr uint32_t n = 70'000'000u;
+    constexpr uint32_t n = std::numeric_limits<uint32_t>::max();
     const uint32_t maxBaseNum = static_cast<uint32_t>(std::sqrt(n)) + 1u;
 
     constexpr uint32_t totalBits = (n / WheelSpan + 1u) * WheelBits;
@@ -502,9 +522,8 @@ int main(){
     CUDA_CHECK(cudaMalloc(&dCounts, sizeof(PrimeCounts)));
     CUDA_CHECK(cudaMalloc(&dFinalSieve, static_cast<size_t>(totalSegments) * SegmentWords * sizeof(uint32_t)));
 
-    // Masks and base primes are independent: build them concurrently.
     CUDA_CHECK(cudaStreamWaitEvent(streams[1], gpuStartEvent));
-    InitMasksKernel<<<dim3((MaxMaskPeriod + 255u) / 256u, NumMaskGroups), 256, 0, streams[1]>>>(MaskGroups);
+    InitMasksKernel<<<dim3((MaxMaskPeriod + 255u) / 256u, MaskGroupsCount), 256, 0, streams[1]>>>(MaskGroups);
     CUDA_CHECK(cudaEventRecord(masksReady, streams[1]));
 
     BasePrimesKernel<<<1, BaseThreads, 0, streams[0]>>>(dPrimes, dCounts, maxBaseNum);
@@ -524,17 +543,49 @@ int main(){
     }
     cudaStreamQuery(streams[NumBatches - 1]); // flush the launch queue (WDDM batching) before blocking host work
 
-    uint32_t* finalSieve;
-    CUDA_CHECK(cudaMallocHost(&finalSieve, totalWords * sizeof(uint32_t)));
+    constexpr size_t sieveBytes = static_cast<size_t>(totalWords) * sizeof(uint32_t);
+    constexpr size_t hostBytes = (sieveBytes + PageBytes - 1) / PageBytes * PageBytes;
+    auto* finalSieve = static_cast<uint32_t *>(::operator new(hostBytes, std::align_val_t{PageBytes}));
+    auto* hostBytesPtr = reinterpret_cast<uint8_t *>(finalSieve);
+    const auto* deviceBytesPtr = reinterpret_cast<const uint8_t *>(dFinalSieve);
+
+    void* pinnedPieces[NumBatches * PinPiecesPerBatch];
+    uint32_t numPinnedPieces = 0;
 
     for (uint32_t k = 0; k < NumBatches; ++k)
     {
-        const uint32_t firstWord = std::min(k * segmentsPerBatch * SegmentWords, totalWords);
-        const uint32_t lastWord = std::min((k + 1) * segmentsPerBatch * SegmentWords, totalWords);
+        const size_t firstWord = std::min<size_t>(static_cast<size_t>(k) * segmentsPerBatch * SegmentWords,
+                                                  totalWords);
+        const size_t lastWord = std::min<size_t>(static_cast<size_t>(k + 1) * segmentsPerBatch * SegmentWords,
+                                                 totalWords);
         if (firstWord < lastWord)
         {
-            CUDA_CHECK(cudaMemcpyAsync(finalSieve + firstWord, dFinalSieve + firstWord,
-                (lastWord - firstWord) * sizeof(uint32_t), cudaMemcpyDeviceToHost, streams[k]));
+            const size_t batchBegin = firstWord * sizeof(uint32_t);
+            const size_t batchEnd = lastWord == totalWords ? hostBytes : lastWord * sizeof(uint32_t);
+            const size_t batchSize = batchEnd - batchBegin;
+            for (uint32_t j = 0; j < PinPiecesPerBatch; ++j)
+            {
+                const size_t pieceBegin = batchBegin + batchSize * j / PinPiecesPerBatch / PageBytes * PageBytes;
+                const size_t pieceEnd = j + 1 == PinPiecesPerBatch
+                                            ? batchEnd
+                                            : batchBegin + batchSize * (j + 1) / PinPiecesPerBatch / PageBytes *
+                                              PageBytes;
+                if (pieceBegin >= pieceEnd)
+                {
+                    continue;
+                }
+                CUDA_CHECK(cudaHostRegister(hostBytesPtr + pieceBegin, pieceEnd - pieceBegin,
+                    cudaHostRegisterDefault));
+                pinnedPieces[numPinnedPieces++] = hostBytesPtr + pieceBegin;
+
+                const size_t copyEnd = std::min(pieceEnd, sieveBytes);
+                if (pieceBegin < copyEnd)
+                {
+                    CUDA_CHECK(cudaMemcpyAsync(hostBytesPtr + pieceBegin, deviceBytesPtr + pieceBegin,
+                        copyEnd - pieceBegin, cudaMemcpyDeviceToHost, streams[k]));
+                    cudaStreamQuery(streams[k]);
+                }
+            }
         }
         if (k != 0)
         {
@@ -583,7 +634,11 @@ int main(){
 
     printf("Sum of primes up to %llu: %llu\n", static_cast<unsigned long long>(n), (sum));
 
-    cudaFreeHost(finalSieve);
+    for (uint32_t i = 0; i < numPinnedPieces; ++i)
+    {
+        cudaHostUnregister(pinnedPieces[i]);
+    }
+    ::operator delete(finalSieve, std::align_val_t{PageBytes});
     cudaFree(dPrimes);
     cudaFree(dCounts);
     cudaFree(dFinalSieve);
