@@ -143,7 +143,6 @@ namespace
     __global__ void __launch_bounds__(256)
     InitMasksKernel(const MaskGroupTable Table){
         constexpr uint32_t maxGroupPrimes = 4u;
-        // Multiples of p (coprime to 30) occupy bits l with l mod 8p in {ValueToBit(p * WheelResidue(j))}, j < 8.
         __shared__ uint32_t residues[maxGroupPrimes][WheelBits];
 
         const MaskGroup& g = Table.Groups[blockIdx.y];
@@ -469,11 +468,43 @@ namespace
             out4[i] = segment4[i];
         }
     }
+
+    bool InitializeCUDA()
+    {
+        int deviceCount = 0;
+        cudaError_t error = cudaGetDeviceCount(&deviceCount);
+        if (error != cudaSuccess || deviceCount == 0)
+        {
+            fprintf(stderr, "No CUDA-capable devices found.\n");
+            return false;
+        }
+
+        cudaDeviceProp properties;
+        cudaGetDeviceProperties(&properties, 0);
+
+        printf("=== CUDA Device Info ===\n");
+        printf("Device:             %s\n", properties.name);
+        printf("Compute Capability: %d.%d\n", properties.major, properties.minor);
+        printf("SM Count:           %d\n", properties.multiProcessorCount);
+        int clockRateKHz = 0;
+        cudaDeviceGetAttribute(&clockRateKHz, cudaDevAttrClockRate, 0);
+        printf("Clock Rate:         %.0f MHz\n", clockRateKHz / 1000.0);
+        printf("Global Memory:      %.2f MB\n", properties.totalGlobalMem / (1024.0 * 1024.0));
+        printf("========================\n");
+
+        return true;
+    }
+
 } // namespace
 
 int main(){
+    constexpr uint32_t n = 70'000'000u;
+
     const auto programStartTime = std::chrono::steady_clock::now();
-    cudaFree(nullptr); // Initializes CUDA runtime.
+    if (!InitializeCUDA())
+    {
+        return EXIT_FAILURE;
+    }
     const auto processingStartTime = std::chrono::steady_clock::now();
 
     cudaEvent_t gpuStartEvent;
@@ -496,13 +527,12 @@ int main(){
 
     cudaEventRecord(gpuStartEvent, streams[0]);
 
-    constexpr uint32_t n = std::numeric_limits<uint32_t>::max();
     const uint32_t maxBaseNum = static_cast<uint32_t>(std::sqrt(n)) + 1u;
 
     constexpr uint32_t totalBits = (n / WheelSpan + 1u) * WheelBits;
-    constexpr uint32_t totalWords = (totalBits + BitsPerWord - 1) / BitsPerWord;
-    constexpr uint32_t totalSegments = (totalWords + SegmentWords - 1) / SegmentWords;
-    constexpr uint32_t segmentsPerBatch = (totalSegments + NumBatches - 1) / NumBatches;
+    constexpr uint32_t totalWords = (totalBits + BitsPerWord - 1u) / BitsPerWord;
+    constexpr uint32_t totalSegments = (totalWords + SegmentWords - 1u) / SegmentWords;
+    constexpr uint32_t segmentsPerBatch = (totalSegments + NumBatches - 1u) / NumBatches;
 
     printf("Configuring GPU Sieve for N = %llu\n", static_cast<unsigned long long>(n));
     printf("Total VRAM required: ~%.2f MB\n", static_cast<float>(totalWords * 4) / (1024 * 1024));
@@ -597,11 +627,12 @@ int main(){
     cudaEventRecord(gpuFinishEvent, streams[0]);
     cudaEventSynchronize(gpuFinishEvent);
 
-    const auto programTotalTime = std::chrono::steady_clock::now() - programStartTime;
+    const auto finishTime = std::chrono::steady_clock::now();
+    const auto programTotalTime = finishTime - programStartTime;
     std::cout << "Total time: " << std::chrono::duration_cast<std::chrono::milliseconds>(programTotalTime).count()
             << " ms\n";
     const auto processingTime = std::chrono::steady_clock::now() - processingStartTime;
-    std::cout << "Total time (without CUDA initialization): "
+    std::cout << "CPU Execution Time: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(processingTime).count() << " ms\n";
 
 
