@@ -37,8 +37,7 @@ __host__ __device__ constexpr uint32_t WheelOffset(const uint32_t C, const uint3
     return WheelBits * (t / WheelSpan) + ResidueToBit(t % WheelSpan);
 }
 
-__host__ __device__ constexpr uint32_t CalculateFirstSegmentFix()
-{
+__host__ __device__ constexpr uint32_t CalculateFirstSegmentFix(){
     uint32_t bits = 0;
     for (const uint32_t p: {7u, 11u, 13u, 17u, 19u, 23u, 29u, 31u, 37u, 41u, 43u, 47u, 53u})
     {

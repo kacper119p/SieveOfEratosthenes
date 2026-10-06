@@ -1,7 +1,7 @@
 ﻿#include "basePrimesKernel.cuh"
 
 __global__ void __launch_bounds__(BaseThreads)
-    BasePrimesKernel(uint4*__restrict__ Primes, PrimeCounts*__restrict__ Counts, const uint32_t MaxValue){
+BasePrimesKernel(uint4*__restrict__ Primes, PrimeCounts*__restrict__ Counts, const uint32_t MaxValue){
     __shared__ uint32_t baseSieve[BaseSieveWords];
     __shared__ uint32_t warpOffsets[32];
     __shared__ uint32_t runningCount;

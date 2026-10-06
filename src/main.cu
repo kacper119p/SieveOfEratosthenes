@@ -19,8 +19,7 @@
 
 namespace
 {
-    __forceinline__ bool CheckCudaSupport()
-    {
+    __forceinline__ bool CheckCudaSupport(){
         int deviceCount = 0;
         const cudaError_t error = cudaGetDeviceCount(&deviceCount);
         if (error != cudaSuccess || deviceCount == 0)
@@ -40,8 +39,7 @@ namespace
         cudaFree(nullptr);
     }
 
-    __forceinline__ uint64_t CalculateSum(const uint32_t N, const uint32_t* const PrimesMask, uint32_t SizeInWords)
-    {
+    __forceinline__ uint64_t CalculateSum(const uint32_t N, const uint32_t* const PrimesMask, uint32_t SizeInWords){
         uint64_t sum = 0;
         for (const uint32_t p: {2u, 3u, 5u})
         {
@@ -146,8 +144,8 @@ int main(){
     constexpr size_t sieveBytes = static_cast<size_t>(totalWords) * sizeof(uint32_t);
     constexpr size_t hostBytes = (sieveBytes + PageBytes - 1) / PageBytes * PageBytes;
     uint32_t* finalSieve = static_cast<uint32_t *>(::operator new(hostBytes, std::align_val_t{PageBytes}));
-    std::byte* hostBytesPtr = reinterpret_cast<std::byte*>(finalSieve);
-    const std::byte* deviceBytesPtr = reinterpret_cast<const std::byte*>(dFinalSieve);
+    std::byte* hostBytesPtr = reinterpret_cast<std::byte *>(finalSieve);
+    const std::byte* deviceBytesPtr = reinterpret_cast<const std::byte *>(dFinalSieve);
 
     void* pinnedPieces[NumBatches * PinPiecesPerBatch];
     uint32_t numPinnedPieces = 0;

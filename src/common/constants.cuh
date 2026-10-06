@@ -38,7 +38,7 @@ constexpr uint32_t WarpPrimeLimit = 1024u;
 constexpr uint32_t LargePrimeMin = SegmentBits / WheelBits;
 
 static_assert(BaseThreads % 32u == 0 && BaseThreads <= 1024u,
-                  "base kernel block size must be warp multiple <= 1024");
+              "base kernel block size must be warp multiple <= 1024");
 static_assert(SegmentWords % ThreadsPerBlock == 0, "segment must split evenly across threads");
 static_assert(ThreadsPerBlock % 32u == 0, "block size must be a multiple of the warp size");
 static_assert(SegmentWords % 4u == 0, "segment must be a multiple of 4 words for uint4 stores");

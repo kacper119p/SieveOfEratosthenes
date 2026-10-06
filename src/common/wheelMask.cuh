@@ -2,12 +2,12 @@
 #include "constants.cuh"
 
 struct MaskGroup
-    {
-        uint32_t Offset;
-        uint32_t Period;
-        uint32_t Count;
-        uint32_t Primes[4];
-    };
+{
+    uint32_t Offset;
+    uint32_t Period;
+    uint32_t Count;
+    uint32_t Primes[4];
+};
 
 struct MaskGroupTable
 {
@@ -26,12 +26,12 @@ constexpr MaskGroupTable MaskGroups = {
 inline __device__ uint32_t DMasks[MaskTotalWords];
 
 __device__ __forceinline__ constexpr uint32_t OffsetToResidue(const uint32_t Residue, const uint32_t Step,
-                                                    const uint32_t LowerMod){
+                                                              const uint32_t LowerMod){
     return Residue >= LowerMod ? Residue - LowerMod : Residue + Step - LowerMod;
 }
 
 template<uint32_t Period, uint32_t Offset>
- __device__ __forceinline__ void ApplyMask(uint32_t (&Acc)[WordsPerThread], const uint32_t FirstWord){
+__device__ __forceinline__ void ApplyMask(uint32_t (&Acc)[WordsPerThread], const uint32_t FirstWord){
     uint32_t idx = FirstWord % Period;
 #pragma unroll
     for (uint32_t j = 0; j < WordsPerThread; ++j)

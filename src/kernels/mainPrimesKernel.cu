@@ -5,10 +5,10 @@
 namespace
 {
     template<bool SingleHit>
-        __device__ __forceinline__ void SieveThreadPrimes(uint32_t*__restrict__ Segment, const uint4*__restrict__ Primes,
-                                                          const uint2*__restrict__ Wheel, const uint32_t Begin,
-                                                          const uint32_t End, const uint32_t SegmentStartIdx,
-                                                          const uint32_t SegmentEndIdx){
+    __device__ __forceinline__ void SieveThreadPrimes(uint32_t*__restrict__ Segment, const uint4*__restrict__ Primes,
+                                                      const uint2*__restrict__ Wheel, const uint32_t Begin,
+                                                      const uint32_t End, const uint32_t SegmentStartIdx,
+                                                      const uint32_t SegmentEndIdx){
         for (uint32_t i = Begin + threadIdx.x; i < End; i += ThreadsPerBlock)
         {
             const uint4 pr = __ldg(&Primes[i]);
