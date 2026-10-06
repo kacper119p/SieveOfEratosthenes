@@ -1,9 +1,9 @@
 ﻿#pragma once
 
 #ifdef NDEBUG
-#define CUDA_CHECK(call) call
+#define SIEVE_OF_ERATOSTHENES_CUDA_CHECK(call) call
 #else
-#define CUDA_CHECK(call)                                                                                               \
+#define #define SIEVE_OF_ERATOSTHENES_CUDA_CHECK(call)                                                                                               \
     do {                                                                                                               \
         cudaError_t error = call;                                                                                      \
         if (error != cudaSuccess) {                                                                                    \

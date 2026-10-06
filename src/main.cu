@@ -17,6 +17,8 @@
 #include "kernels/initializeWheelMaskKernel.cuh"
 #include "kernels/mainPrimesKernel.cuh"
 
+using namespace SieveOfEratosthenes;
+
 namespace
 {
     __forceinline__ bool CheckCudaSupport(){
@@ -88,13 +90,13 @@ int main(){
     cudaEvent_t batchDone[NumBatches];
     for (uint32_t k = 0; k < NumBatches; ++k)
     {
-        CUDA_CHECK(cudaStreamCreateWithFlags(&streams[k], cudaStreamNonBlocking));
-        CUDA_CHECK(cudaEventCreateWithFlags(&batchDone[k], cudaEventDisableTiming));
+        SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamCreateWithFlags(&streams[k], cudaStreamNonBlocking));
+        SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventCreateWithFlags(&batchDone[k], cudaEventDisableTiming));
     }
     cudaEvent_t masksReady;
     cudaEvent_t primesReady;
-    CUDA_CHECK(cudaEventCreateWithFlags(&masksReady, cudaEventDisableTiming));
-    CUDA_CHECK(cudaEventCreateWithFlags(&primesReady, cudaEventDisableTiming));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventCreateWithFlags(&masksReady, cudaEventDisableTiming));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventCreateWithFlags(&primesReady, cudaEventDisableTiming));
 
     cudaEventRecord(gpuStartEvent, streams[0]);
 
@@ -116,16 +118,17 @@ int main(){
     uint4* dPrimes;
     PrimeCounts* dCounts;
     uint32_t* dFinalSieve;
-    CUDA_CHECK(cudaMalloc(&dPrimes, maxBasePrimes * sizeof(uint4)));
-    CUDA_CHECK(cudaMalloc(&dCounts, sizeof(PrimeCounts)));
-    CUDA_CHECK(cudaMalloc(&dFinalSieve, static_cast<size_t>(totalSegments) * SegmentWords * sizeof(uint32_t)));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaMalloc(&dPrimes, maxBasePrimes * sizeof(uint4)));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaMalloc(&dCounts, sizeof(PrimeCounts)));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(
+        cudaMalloc(&dFinalSieve, static_cast<size_t>(totalSegments) * SegmentWords * sizeof(uint32_t)));
 
-    CUDA_CHECK(cudaStreamWaitEvent(streams[1], gpuStartEvent));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[1], gpuStartEvent));
     InitMasksKernel<<<dim3((MaxMaskPeriod + 255u) / 256u, MaskGroupsCount), 256, 0, streams[1]>>>(MaskGroups);
-    CUDA_CHECK(cudaEventRecord(masksReady, streams[1]));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventRecord(masksReady, streams[1]));
 
     BasePrimesKernel<<<1, BaseThreads, 0, streams[0]>>>(dPrimes, dCounts, maxBaseNum);
-    CUDA_CHECK(cudaEventRecord(primesReady, streams[0]));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventRecord(primesReady, streams[0]));
 
     for (uint32_t k = 0; k < NumBatches; ++k)
     {
@@ -135,8 +138,8 @@ int main(){
         {
             continue;
         }
-        CUDA_CHECK(cudaStreamWaitEvent(streams[k], masksReady));
-        CUDA_CHECK(cudaStreamWaitEvent(streams[k], primesReady));
+        SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[k], masksReady));
+        SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[k], primesReady));
         MainKernel<<<last - first, ThreadsPerBlock, 0, streams[k]>>>(dFinalSieve, dPrimes, dCounts, first);
     }
     cudaStreamQuery(streams[NumBatches - 1]);
@@ -172,23 +175,24 @@ int main(){
                 {
                     continue;
                 }
-                CUDA_CHECK(cudaHostRegister(hostBytesPtr + pieceBegin, pieceEnd - pieceBegin,
+                SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaHostRegister(hostBytesPtr + pieceBegin, pieceEnd - pieceBegin,
                     cudaHostRegisterDefault));
                 pinnedPieces[numPinnedPieces++] = hostBytesPtr + pieceBegin;
 
                 const size_t copyEnd = std::min(pieceEnd, sieveBytes);
                 if (pieceBegin < copyEnd)
                 {
-                    CUDA_CHECK(cudaMemcpyAsync(hostBytesPtr + pieceBegin, deviceBytesPtr + pieceBegin,
-                        copyEnd - pieceBegin, cudaMemcpyDeviceToHost, streams[k]));
+                    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(
+                        cudaMemcpyAsync(hostBytesPtr + pieceBegin, deviceBytesPtr + pieceBegin,
+                            copyEnd - pieceBegin, cudaMemcpyDeviceToHost, streams[k]));
                     cudaStreamQuery(streams[k]);
                 }
             }
         }
         if (k != 0)
         {
-            CUDA_CHECK(cudaEventRecord(batchDone[k], streams[k]));
-            CUDA_CHECK(cudaStreamWaitEvent(streams[0], batchDone[k]));
+            SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventRecord(batchDone[k], streams[k]));
+            SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[0], batchDone[k]));
         }
     }
 
