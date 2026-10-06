@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -421,9 +422,7 @@ namespace
         }
 
         const PrimeCounts counts = *Counts;
-        __syncthreads();
-
-        {
+        __syncthreads(); {
             const uint32_t lane = tid & 31u;
             const uint32_t warp = tid >> 5;
             const uint32_t wheelJ = lane & 7u;
@@ -469,8 +468,7 @@ namespace
         }
     }
 
-    bool InitializeCUDA()
-    {
+    bool InitializeCuda(){
         int deviceCount = 0;
         cudaError_t error = cudaGetDeviceCount(&deviceCount);
         if (error != cudaSuccess || deviceCount == 0)
@@ -479,9 +477,10 @@ namespace
             return false;
         }
 
-        cudaDeviceProp properties;
+        cudaDeviceProp properties{};
         cudaGetDeviceProperties(&properties, 0);
 
+        printf("\n");
         printf("=== CUDA Device Info ===\n");
         printf("Device:             %s\n", properties.name);
         printf("Compute Capability: %d.%d\n", properties.major, properties.minor);
@@ -489,19 +488,19 @@ namespace
         int clockRateKHz = 0;
         cudaDeviceGetAttribute(&clockRateKHz, cudaDevAttrClockRate, 0);
         printf("Clock Rate:         %.0f MHz\n", clockRateKHz / 1000.0);
-        printf("Global Memory:      %.2f MB\n", properties.totalGlobalMem / (1024.0 * 1024.0));
-        printf("========================\n");
+        printf("Global Memory:      %.2f MB\n", static_cast<double>(properties.totalGlobalMem) / (1024.0 * 1024.0));
+        printf("========================\n\n");
 
         return true;
     }
-
 } // namespace
 
 int main(){
     constexpr uint32_t n = 70'000'000u;
+    printf("N = %" PRIu32 "\n", (n));
 
     const auto programStartTime = std::chrono::steady_clock::now();
-    if (!InitializeCUDA())
+    if (!InitializeCuda())
     {
         return EXIT_FAILURE;
     }
@@ -533,9 +532,6 @@ int main(){
     constexpr uint32_t totalWords = (totalBits + BitsPerWord - 1u) / BitsPerWord;
     constexpr uint32_t totalSegments = (totalWords + SegmentWords - 1u) / SegmentWords;
     constexpr uint32_t segmentsPerBatch = (totalSegments + NumBatches - 1u) / NumBatches;
-
-    printf("Configuring GPU Sieve for N = %llu\n", static_cast<unsigned long long>(n));
-    printf("Total VRAM required: ~%.2f MB\n", static_cast<float>(totalWords * 4) / (1024 * 1024));
 
     if (maxBaseNum > MaxBaseValue)
     {
@@ -627,18 +623,23 @@ int main(){
     cudaEventRecord(gpuFinishEvent, streams[0]);
     cudaEventSynchronize(gpuFinishEvent);
 
+    const auto cudaInitializationTime = processingStartTime - programStartTime;
+    std::cout << "CUDA Initialization Time: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(cudaInitializationTime).count() << " ms\n";
+
     const auto finishTime = std::chrono::steady_clock::now();
-    const auto programTotalTime = finishTime - programStartTime;
-    std::cout << "Total time: " << std::chrono::duration_cast<std::chrono::milliseconds>(programTotalTime).count()
-            << " ms\n";
     const auto processingTime = std::chrono::steady_clock::now() - processingStartTime;
     std::cout << "CPU Execution Time: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(processingTime).count() << " ms\n";
 
 
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, gpuStartEvent, gpuFinishEvent);
-    printf("GPU Execution Time: %.3f ms\n", milliseconds);
+    float gpuMilliseconds = 0;
+    cudaEventElapsedTime(&gpuMilliseconds, gpuStartEvent, gpuFinishEvent);
+    printf("GPU Execution Time: %.3f ms\n", gpuMilliseconds);
+
+    const auto programTotalTime = finishTime - programStartTime;
+    std::cout << "Total time: " << std::chrono::duration_cast<std::chrono::milliseconds>(programTotalTime).count()
+            << " ms\n";
 
     uint64_t sum = 0;
     for (const uint32_t p: {2u, 3u, 5u})
@@ -663,7 +664,7 @@ int main(){
         }
     }
 
-    printf("Sum of primes up to %llu: %llu\n", static_cast<unsigned long long>(n), (sum));
+    printf("Sum: %" PRIu64, sum);
 
     for (uint32_t i = 0; i < numPinnedPieces; ++i)
     {
