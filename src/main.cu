@@ -11,8 +11,8 @@
 
 #include "common/check.cuh"
 #include "common/constants.cuh"
-#include "common/utility.cuh"
-#include "common/wheelMask.cuh"
+#include "common/math.cuh"
+#include "common/wheel.cuh"
 #include "kernels/basePrimesKernel.cuh"
 #include "kernels/initializeWheelMaskKernel.cuh"
 #include "kernels/mainPrimesKernel.cuh"
@@ -41,7 +41,8 @@ namespace
         cudaFree(nullptr);
     }
 
-    __forceinline__ uint64_t CalculateSum(const uint32_t N, const uint32_t* const PrimesMask, uint32_t SizeInWords){
+    __forceinline__ uint64_t CalculateSum(const uint32_t N, const uint32_t* const PrimesMask,
+                                          const uint32_t SizeInWords){
         uint64_t sum = 0;
         for (const uint32_t p: {2u, 3u, 5u})
         {
@@ -86,9 +87,11 @@ int main(){
     cudaEvent_t gpuFinishEvent;
     cudaEventCreate(&gpuFinishEvent);
 
-    cudaStream_t streams[NumBatches];
-    cudaEvent_t batchDone[NumBatches];
-    for (uint32_t k = 0; k < NumBatches; ++k)
+    cudaEventRecord(gpuStartEvent);
+
+    cudaStream_t streams[GpuBatchesCount];
+    cudaEvent_t batchDone[GpuBatchesCount];
+    for (uint32_t k = 0; k < GpuBatchesCount; ++k)
     {
         SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamCreateWithFlags(&streams[k], cudaStreamNonBlocking));
         SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventCreateWithFlags(&batchDone[k], cudaEventDisableTiming));
@@ -98,39 +101,32 @@ int main(){
     SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventCreateWithFlags(&masksReady, cudaEventDisableTiming));
     SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventCreateWithFlags(&primesReady, cudaEventDisableTiming));
 
-    cudaEventRecord(gpuStartEvent, streams[0]);
-
     const uint32_t maxBaseNum = static_cast<uint32_t>(std::sqrt(n)) + 1u;
 
     constexpr uint32_t totalBits = (n / WheelSpan + 1u) * WheelBits;
     constexpr uint32_t totalWords = (totalBits + BitsPerWord - 1u) / BitsPerWord;
     constexpr uint32_t totalSegments = (totalWords + SegmentWords - 1u) / SegmentWords;
-    constexpr uint32_t segmentsPerBatch = (totalSegments + NumBatches - 1u) / NumBatches;
+    constexpr uint32_t segmentsPerBatch = (totalSegments + GpuBatchesCount - 1u) / GpuBatchesCount;
 
-    if (maxBaseNum > MaxBaseValue)
-    {
-        fprintf(stderr, "N too large: base sieve supports values up to %u\n", MaxBaseValue);
-        return EXIT_FAILURE;
-    }
     const uint32_t maxBasePrimes =
             static_cast<uint32_t>(1.26 * maxBaseNum / std::log(std::max(maxBaseNum, 2u))) + 1u;
 
-    uint4* dPrimes;
-    PrimeCounts* dCounts;
-    uint32_t* dFinalSieve;
-    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaMalloc(&dPrimes, maxBasePrimes * sizeof(uint4)));
-    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaMalloc(&dCounts, sizeof(PrimeCounts)));
+    BasePrime* basePrimesBuffer;
+    PrimeCounts* countsBuffer;
+    uint32_t* finalSieveBuffer;
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaMalloc(&basePrimesBuffer, maxBasePrimes * sizeof(BasePrime)));
+    SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaMalloc(&countsBuffer, sizeof(PrimeCounts)));
     SIEVE_OF_ERATOSTHENES_CUDA_CHECK(
-        cudaMalloc(&dFinalSieve, static_cast<size_t>(totalSegments) * SegmentWords * sizeof(uint32_t)));
+        cudaMalloc(&finalSieveBuffer, static_cast<size_t>(totalSegments) * SegmentWords * sizeof(uint32_t)));
 
     SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[1], gpuStartEvent));
-    InitMasksKernel<<<dim3((MaxMaskPeriod + 255u) / 256u, MaskGroupsCount), 256, 0, streams[1]>>>(MaskGroups);
+    InitializeWheelsMaskKernel<<<dim3((MaxMaskPeriod + 255u) / 256u, MaskGroupsCount), 256, 0, streams[1]>>>(MaskGroups);
     SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventRecord(masksReady, streams[1]));
 
-    BasePrimesKernel<<<1, BaseThreads, 0, streams[0]>>>(dPrimes, dCounts, maxBaseNum);
+    BasePrimesKernel<<<1, BaseThreads, 0, streams[0]>>>(basePrimesBuffer, countsBuffer, maxBaseNum);
     SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaEventRecord(primesReady, streams[0]));
 
-    for (uint32_t k = 0; k < NumBatches; ++k)
+    for (uint32_t k = 0; k < GpuBatchesCount; ++k)
     {
         const uint32_t first = k * segmentsPerBatch;
         const uint32_t last = std::min(first + segmentsPerBatch, totalSegments);
@@ -140,20 +136,21 @@ int main(){
         }
         SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[k], masksReady));
         SIEVE_OF_ERATOSTHENES_CUDA_CHECK(cudaStreamWaitEvent(streams[k], primesReady));
-        MainKernel<<<last - first, ThreadsPerBlock, 0, streams[k]>>>(dFinalSieve, dPrimes, dCounts, first);
+        MainPrimesKernel<<<last - first, ThreadsPerBlock, 0, streams[k]>>>(finalSieveBuffer, basePrimesBuffer, countsBuffer,
+                                                                     first);
     }
-    cudaStreamQuery(streams[NumBatches - 1]);
+    cudaStreamQuery(streams[GpuBatchesCount - 1]);
 
     constexpr size_t sieveBytes = static_cast<size_t>(totalWords) * sizeof(uint32_t);
     constexpr size_t hostBytes = (sieveBytes + PageBytes - 1) / PageBytes * PageBytes;
     uint32_t* finalSieve = static_cast<uint32_t *>(::operator new(hostBytes, std::align_val_t{PageBytes}));
     std::byte* hostBytesPtr = reinterpret_cast<std::byte *>(finalSieve);
-    const std::byte* deviceBytesPtr = reinterpret_cast<const std::byte *>(dFinalSieve);
+    const std::byte* deviceBytesPtr = reinterpret_cast<const std::byte *>(finalSieveBuffer);
 
-    void* pinnedPieces[NumBatches * PinPiecesPerBatch];
+    void* pinnedPieces[GpuBatchesCount * PinPiecesPerBatch];
     uint32_t numPinnedPieces = 0;
 
-    for (uint32_t k = 0; k < NumBatches; ++k)
+    for (uint32_t k = 0; k < GpuBatchesCount; ++k)
     {
         const size_t firstWord = std::min<size_t>(static_cast<size_t>(k) * segmentsPerBatch * SegmentWords,
                                                   totalWords);
@@ -226,10 +223,10 @@ int main(){
         cudaHostUnregister(pinnedPieces[i]);
     }
     ::operator delete(finalSieve, std::align_val_t{PageBytes});
-    cudaFree(dPrimes);
-    cudaFree(dCounts);
-    cudaFree(dFinalSieve);
-    for (uint32_t k = 0; k < NumBatches; ++k)
+    cudaFree(basePrimesBuffer);
+    cudaFree(countsBuffer);
+    cudaFree(finalSieveBuffer);
+    for (uint32_t k = 0; k < GpuBatchesCount; ++k)
     {
         cudaStreamDestroy(streams[k]);
         cudaEventDestroy(batchDone[k]);

@@ -1,7 +1,8 @@
 ﻿#pragma once
-#include "common/utility.cuh"
+#include "common/basePrime.cuh"
+#include "common/math.cuh"
 
 namespace SieveOfEratosthenes
 {
-    __global__ void BasePrimesKernel(uint4*__restrict__ Primes, PrimeCounts*__restrict__ Counts, uint32_t MaxValue);
+    __global__ void BasePrimesKernel(BasePrime*__restrict__ BasePrimes, PrimeCounts*__restrict__ Counts, uint32_t MaxValue);
 }

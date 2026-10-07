@@ -1,6 +1,6 @@
 ﻿#include "mainPrimesKernel.cuh"
 
-#include "common/wheelMask.cuh"
+#include "common/wheel.cuh"
 
 namespace SieveOfEratosthenes
 {
@@ -8,25 +8,25 @@ namespace SieveOfEratosthenes
     {
         template<bool SingleHit>
         __device__ __forceinline__ void SieveThreadPrimes(uint32_t*__restrict__ Segment,
-                                                          const uint4*__restrict__ Primes,
+                                                          const BasePrime*__restrict__ Primes,
                                                           const uint2*__restrict__ Wheel, const uint32_t Begin,
                                                           const uint32_t End, const uint32_t SegmentStartIdx,
                                                           const uint32_t SegmentEndIdx){
             for (uint32_t i = Begin + threadIdx.x; i < End; i += ThreadsPerBlock)
             {
-                const uint4 pr = __ldg(&Primes[i]);
-                if (pr.w >= SegmentEndIdx)
+                const BasePrime prime = LoadBasePrime(&Primes[i]);
+                if (prime.SquareIdx >= SegmentEndIdx)
                 {
                     break;
                 }
 
-                const uint32_t step = pr.x & ~7u;
-                const uint32_t p = pr.x >> 3;
-                const uint32_t lower = pr.w > SegmentStartIdx ? pr.w : SegmentStartIdx;
-                const uint32_t lowerMod = FastMod(lower, step, pr.y, pr.z);
+                const uint32_t step = BasePrimeStep(prime);
+                const uint32_t p = BasePrimeValue(prime);
+                const uint32_t lower = prime.SquareIdx > SegmentStartIdx ? prime.SquareIdx : SegmentStartIdx;
+                const uint32_t lowerMod = FastMod(lower, step, prime.MagicLo, prime.MagicHi);
                 const uint32_t localLower = lower - SegmentStartIdx;
                 const uint32_t kx8 = (p / WheelSpan) * WheelBits;
-                const uint2 wheel = Wheel[pr.x & 7u];
+                const uint2 wheel = Wheel[BasePrimeWheelClass(prime)];
 
 #pragma unroll
                 for (uint32_t j = 0; j < WheelBits; ++j)
@@ -52,7 +52,7 @@ namespace SieveOfEratosthenes
     } // namespace
 
     __global__ void __launch_bounds__(ThreadsPerBlock)
-    MainKernel(uint32_t*__restrict__ BitArray, const uint4*__restrict__ Primes,
+    MainPrimesKernel(uint32_t*__restrict__ BitArray, const BasePrime*__restrict__ BasePrimes,
                const PrimeCounts*__restrict__ Counts, const uint32_t FirstSegment){
         __shared__ alignas(16) uint32_t segment[SegmentWords];
         __shared__ alignas(8) uint8_t wheel[WheelBits * WheelBits];
@@ -100,17 +100,17 @@ namespace SieveOfEratosthenes
 
             for (uint32_t i = warp; i < counts.WarpEnd; i += WarpsPerBlock)
             {
-                const uint4 pr = __ldg(&Primes[i]);
-                if (pr.w >= segmentEndIdx)
+                const BasePrime basePrime = LoadBasePrime(&BasePrimes[i]);
+                if (basePrime.SquareIdx >= segmentEndIdx)
                 {
                     break;
                 }
 
-                const uint32_t step = pr.x & ~7u;
-                const uint32_t p = pr.x >> 3;
-                const uint32_t lower = pr.w > segmentStartIdx ? pr.w : segmentStartIdx;
-                const uint32_t lowerMod = FastMod(lower, step, pr.y, pr.z);
-                const uint32_t residue = (p / WheelSpan) * residueJx8 + wheel[(pr.x & 7u) * WheelBits + wheelJ];
+                const uint32_t step = BasePrimeStep(basePrime);
+                const uint32_t p = BasePrimeValue(basePrime);
+                const uint32_t lower = basePrime.SquareIdx > segmentStartIdx ? basePrime.SquareIdx : segmentStartIdx;
+                const uint32_t lowerMod = FastMod(lower, step, basePrime.MagicLo, basePrime.MagicHi);
+                const uint32_t residue = (p / WheelSpan) * residueJx8 + wheel[BasePrimeWheelClass(basePrime) * WheelBits + wheelJ];
 
                 const uint32_t start = (lower - segmentStartIdx) + OffsetToResidue(residue, step, lowerMod) +
                                        phase * step;
@@ -123,9 +123,9 @@ namespace SieveOfEratosthenes
         }
 
         const uint2* wheel2 = reinterpret_cast<const uint2 *>(wheel);
-        SieveThreadPrimes<false>(segment, Primes, wheel2, counts.WarpEnd, counts.LargeBegin, segmentStartIdx,
+        SieveThreadPrimes<false>(segment, BasePrimes, wheel2, counts.WarpEnd, counts.LargeBegin, segmentStartIdx,
                                  segmentEndIdx);
-        SieveThreadPrimes<true>(segment, Primes, wheel2, counts.LargeBegin, counts.Total, segmentStartIdx,
+        SieveThreadPrimes<true>(segment, BasePrimes, wheel2, counts.LargeBegin, counts.Total, segmentStartIdx,
                                 segmentEndIdx);
         __syncthreads();
 

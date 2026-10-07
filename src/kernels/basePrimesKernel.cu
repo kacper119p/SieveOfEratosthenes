@@ -1,9 +1,11 @@
 ﻿#include "basePrimesKernel.cuh"
 
+#include "common/wheel.cuh"
+
 namespace SieveOfEratosthenes
 {
     __global__ void __launch_bounds__(BaseThreads)
-    BasePrimesKernel(uint4*__restrict__ Primes, PrimeCounts*__restrict__ Counts, const uint32_t MaxValue){
+    BasePrimesKernel(BasePrime*__restrict__ BasePrimes, PrimeCounts*__restrict__ Counts, const uint32_t MaxValue){
         __shared__ uint32_t baseSieve[BaseSieveWords];
         __shared__ uint32_t warpOffsets[32];
         __shared__ uint32_t runningCount;
@@ -105,8 +107,12 @@ namespace SieveOfEratosthenes
                 const uint64_t m = (~0ULL) / step + 1u;
                 const uint32_t wheelClass = ResidueToBit(p % WheelSpan);
                 const uint32_t sqIdx = ValueToBit(p * p);
-                Primes[idx] = make_uint4(step | wheelClass, static_cast<uint32_t>(m), static_cast<uint32_t>(m >> 32),
-                                         sqIdx);
+                BasePrimes[idx] = BasePrime{
+                    .StepAndClass = step | wheelClass,
+                    .MagicLo = static_cast<uint32_t>(m),
+                    .MagicHi = static_cast<uint32_t>(m >> 32),
+                    .SquareIdx = sqIdx,
+                };
                 if (p <= WarpPrimeLimit)
                 {
                     atomicAdd(&warpModeCount, 1u);

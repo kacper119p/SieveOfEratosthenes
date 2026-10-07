@@ -15,7 +15,7 @@ namespace SieveOfEratosthenes
     constexpr uint32_t BaseSieveWords = 1024u;
     constexpr uint32_t MaxBaseValue = 2u * BaseSieveWords * BitsPerWord + 1u;
 
-    constexpr uint32_t NumBatches = 8u;
+    constexpr uint32_t GpuBatchesCount = 8u;
     constexpr uint32_t PinPiecesPerBatch = 4u;
     constexpr size_t PageBytes = 4096u;
 

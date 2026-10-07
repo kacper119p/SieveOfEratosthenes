@@ -1,7 +1,7 @@
 ﻿#pragma once
-#include "common/wheelMask.cuh"
+#include "common/wheel.cuh"
 
 namespace SieveOfEratosthenes
 {
-    __global__ void InitMasksKernel(MaskGroupTable Table);
+    __global__ void InitializeWheelsMaskKernel(MaskGroupTable Table);
 }

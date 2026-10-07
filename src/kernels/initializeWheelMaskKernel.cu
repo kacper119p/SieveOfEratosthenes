@@ -1,11 +1,11 @@
 ﻿#include "initializeWheelMaskKernel.cuh"
 
-#include "common/utility.cuh"
+#include "common/math.cuh"
 
 namespace SieveOfEratosthenes
 {
     __global__ void __launch_bounds__(256)
-    InitMasksKernel(const MaskGroupTable Table){
+    InitializeWheelsMaskKernel(const MaskGroupTable Table){
         constexpr uint32_t maxGroupPrimes = 4u;
         __shared__ uint32_t residues[maxGroupPrimes][WheelBits];
 
