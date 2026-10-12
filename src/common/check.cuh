@@ -3,7 +3,7 @@
 #ifdef NDEBUG
 #define SIEVE_OF_ERATOSTHENES_CUDA_CHECK(call) call
 #else
-#define #define SIEVE_OF_ERATOSTHENES_CUDA_CHECK(call)                                                                                               \
+#define SIEVE_OF_ERATOSTHENES_CUDA_CHECK(call)                                                                                               \
     do {                                                                                                               \
         cudaError_t error = call;                                                                                      \
         if (error != cudaSuccess) {                                                                                    \
